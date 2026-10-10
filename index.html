@@ -529,6 +529,12 @@ h1,h2,p{margin:0}
 .rules p{margin:0 0 12px;line-height:1.75;font-size:15px}
 .rules b{color:var(--ink)}
 @media (max-width:380px){.emo-grid{grid-template-columns:repeat(6,1fr)}.stx-bal{font-size:52px}}
+.stx-debt{display:inline-block;margin-top:8px;padding:3px 12px;border-radius:999px;background:var(--danger-soft);color:var(--danger);font-size:13.5px;font-weight:600}
+.rw-joint{margin-bottom:6px;border-color:var(--gold);color:var(--gold-ink)}
+.debt-box{margin-top:10px;padding:10px 14px;border-radius:12px;background:var(--danger-soft);color:var(--danger);font-size:14.5px;font-weight:500}
+.debt-box.out{background:var(--ok-bg);color:var(--ok)}
+.jt-head{display:flex;align-items:center;gap:14px}
+.jt-row .jt-in{width:96px;height:46px;border:1px solid var(--line);border-radius:12px;background:var(--surface2);font-size:18px;text-align:center}
 </style>
 </head>
 <body>
@@ -936,7 +942,9 @@ function cleanStars(o){
   (Array.isArray(o.spent)?o.spent:[]).forEach(x=>{
     if(!x||typeof x!=='object')return;
     const cost=cleanCost(x.cost);if(!cost||!validDate(x.date))return;
-    spent.push({id:String(x.id||uid()),rewardId:x.rewardId?String(x.rewardId):null,name:String(x.name||'مكافأة').slice(0,40),cost,date:x.date,createdAt:Number.isFinite(x.createdAt)?x.createdAt:Date.now()});
+    const e={id:String(x.id||uid()),rewardId:x.rewardId?String(x.rewardId):null,name:String(x.name||'مكافأة').slice(0,40),cost,date:x.date,createdAt:Number.isFinite(x.createdAt)?x.createdAt:Date.now()};
+    if(x.joint){e.joint=String(x.joint);e.total=cleanCost(x.total)||cost;e.with=String(x.with||'').slice(0,120);}
+    spent.push(e);
   });
   const gifts={};
   if(o.gifts&&typeof o.gifts==='object')Object.keys(o.gifts).forEach(k=>{if(validDate(k)&&validDate(o.gifts[k]))gifts[k]=o.gifts[k];});
@@ -960,7 +968,15 @@ function cleanRewards(o){
     (Array.isArray(o.family.done)?o.family.done:[]).forEach(x=>{if(x&&validDate(x.date))done.push({date:x.date,name:String(x.name||'').slice(0,40)});});
     family=Object.assign(f,{base:Math.max(0,Math.round(+o.family.base)||0),done});
   }
-  return {pin:typeof o.pin==='string'&&/^\d{4,6}$/.test(o.pin)?o.pin:'',items,weekly,family};
+  const loans=[];
+  (Array.isArray(o.loans)?o.loans:[]).forEach(l=>{
+    if(!l||typeof l!=='object'||!l.from||!l.to||l.from===l.to)return;
+    const amount=cleanCost(l.amount);if(!amount||!validDate(l.date))return;
+    const repaid=[];let left=amount;
+    (Array.isArray(l.repaid)?l.repaid:[]).forEach(r=>{const a=Math.min(cleanCost(r&&r.amount),left);if(a>0&&validDate(r.date)){repaid.push({id:String(r.id||uid()),amount:a,date:r.date});left-=a;}});
+    loans.push({id:String(l.id||uid()),from:String(l.from),to:String(l.to),amount,date:l.date,createdAt:Number.isFinite(l.createdAt)?l.createdAt:Date.now(),repaid,forgiven:validDate(l.forgiven)?l.forgiven:null});
+  });
+  return {pin:typeof o.pin==='string'&&/^\d{4,6}$/.test(o.pin)?o.pin:'',items,weekly,family,loans};
 }
 
 /* ═══════════════ التخزين المحلي ═══════════════ */
@@ -1013,6 +1029,7 @@ function cleanStudent(s){
 function cleanData(o){
   const out={app:'quran-tracker-multi',v:1,selected:null,students:[],rewards:cleanRewards(o&&o.rewards)};
   if(o&&Array.isArray(o.students))o.students.forEach(s=>{const c=cleanStudent(s);if(c)out.students.push(c);});
+  {const ids=new Set(out.students.map(s=>s.id));out.rewards.loans=out.rewards.loans.filter(l=>ids.has(l.from)&&ids.has(l.to));}
   out.selected=out.students.some(s=>s.id===(o&&o.selected))?o.selected:(out.students[0]?out.students[0].id:null);
   return out;
 }
@@ -1391,11 +1408,18 @@ function starsOf(stu){
   const gifts=weeks.filter(w=>w.earned&&w.ended);
   const thisWeek=weekStart(today);
   const spent=SS.spent.reduce((s,x)=>s+x.cost,0);
-  return {days,byDate,today:todayRow,goalNow,streak,best,earned,spent,balance:earned-spent,
+  /* إهداء النجوم بين الطلاب: تنتقل من رصيد المُعطي إلى رصيد الآخر، بلا سداد */
+  let gotIn=0,gaveOut=0;const giftsIn=[],giftsOut=[];
+  (DATA.rewards.loans||[]).forEach(l=>{
+    if(l.to===stu.id){gotIn+=l.amount;giftsIn.push(l);}
+    else if(l.from===stu.id){gaveOut+=l.amount;giftsOut.push(l);}
+  });
+  return {days,byDate,today:todayRow,goalNow,streak,best,earned,spent,balance:earned-spent+gotIn-gaveOut,gotIn,gaveOut,giftsIn,giftsOut,
     quarter,quarterDate,juzDone:jc.filter((c,j)=>c>=JSIZE[j]).length,juzReviews,
     weeks,gifts,giftsPending:gifts.filter(w=>!SS.gifts[w.start]),thisWeek,
     weekDays:Array.from({length:7},(_,k)=>{const d=addDays(thisWeek,k);return {date:d,row:byDate[d]||null,ex:exc.has(d)};})};
 }
+const stuName=id=>{const s=DATA.students.find(x=>x.id===id);return s?s.name:'طالب محذوف';};
 const familyEarned=()=>DATA.students.reduce((s,x)=>s+starsOf(x).earned,0);
 /* الرمز السري لوليّ الأمر: يبقى مفتوحًا 10 دقائق بعد إدخاله */
 function pinGate(fn){
@@ -1444,7 +1468,7 @@ function rewardCardHTML(x,S,SS){
       <div class="rw-c">${STAR5}${num(x.cost)}</div>
       <div class="bar"><i style="width:${pct.toFixed(0)}%"></i></div>
       ${can?`<button type="button" class="btn btn-primary rw-btn" data-act="rw-redeem" data-id="${esc(x.id)}">اصرفها</button>`
-        :`<p class="rw-left">باقي ${num(x.cost-S.balance)}</p><button type="button" class="btn btn-ghost rw-btn" data-act="rw-target" data-id="${esc(x.id)}">${isT?'إلغاء الهدف':'اجعلها هدفي'}</button>`}
+        :`<p class="rw-left">باقي ${num(x.cost-S.balance)}</p>${jointPossible(x,curStudent())?`<button type="button" class="btn btn-ghost rw-btn rw-joint" data-act="rw-joint" data-id="${esc(x.id)}">🤝 اجمعوا لها معًا</button>`:''}<button type="button" class="btn btn-ghost rw-btn" data-act="rw-target" data-id="${esc(x.id)}">${isT?'إلغاء الهدف':'اجعلها هدفي'}</button>`}
     </div></div>`;
 }
 function viewStars(stu){
@@ -1452,7 +1476,8 @@ function viewStars(stu){
   let h=`<section class="stx-hero" aria-label="رصيد النجوم">
     <div class="stx-name">نجوم ${esc(stu.name)}</div>
     <div class="stx-bal">${STAR5}<span>${num(S.balance)}</span></div>
-    <div class="stx-sub">جمعت ${num(S.earned)} · صرفت ${num(S.spent)}</div></section>`;
+    <div class="stx-sub">جمعت ${num(S.earned)} · صرفت ${num(S.spent)}</div>
+    ${S.gotIn||S.gaveOut?`<div class="stx-sub">${S.gotIn?'أُهدي إليك '+num(S.gotIn):''}${S.gotIn&&S.gaveOut?' · ':''}${S.gaveOut?'أهديت '+num(S.gaveOut):''}</div>`:''}</section>`;
 
   /* هدف اليوم */
   const boxes=Array.from({length:t.goal},(_,i)=>`<i class="${i<t.lines?'on':''}"></i>`).join('');
@@ -1552,8 +1577,10 @@ function viewStars(stu){
   }
   h+='</section>';
 
+  h+=siblingsHTML(stu,S);
+
   if(SS.spent.length){
-    h+=`<section class="sec"><div class="sec-h"><h2>ما صرفته</h2></div><ul class="rows">${SS.spent.slice().reverse().map(x=>`<li class="row"><div style="flex:1;min-width:0"><div class="t">${esc(x.name)}</div><div class="s">${fmtDate(x.date)}</div></div><b class="stx-minus">−${num(x.cost)}</b><button type="button" class="icon-x" data-act="spent-undo" data-id="${esc(x.id)}" aria-label="إلغاء هذا الصرف">${TRASH}</button></li>`).join('')}</ul></section>`;
+    h+=`<section class="sec"><div class="sec-h"><h2>ما صرفته</h2></div><ul class="rows">${SS.spent.slice().reverse().map(x=>`<li class="row"><div style="flex:1;min-width:0"><div class="t">${esc(x.name)}${x.joint?' 🤝':''}</div><div class="s">${fmtDate(x.date)}${x.joint?' · مع '+esc(x.with)+' (السعر '+num(x.total)+')':''}</div></div><b class="stx-minus">−${num(x.cost)}</b><button type="button" class="icon-x" data-act="spent-undo" data-id="${esc(x.id)}" aria-label="إلغاء هذا الصرف">${TRASH}</button></li>`).join('')}</ul></section>`;
   }
 
   /* وليّ الأمر */
@@ -1611,6 +1638,7 @@ function starsRulesHTML(){
     <p><b>🔥 البونص:</b> إذا حققت الهدف 3 أيام متتالية تحصل على +30% في اليوم الثالث، ثم +40% في الرابع، و+50% في الخامس… حتى 70%، ويبقى 70% ما دمت مستمرًا.</p>
     <p><b>🎁 الهدية الأسبوعية:</b> حقق الهدف كل يوم من الأحد إلى السبت.</p>
     <p><b>📖 المراجعة:</b> كل صفحة = نجمة. نصف جزء (10 صفحات) في جلسة واحدة ×1.5، وجزء كامل في جلسة واحدة ×2.</p>
+    <p><b>🤝 مع الإخوة:</b> تستطيعون جمع نجومكم لشراء مكافأة واحدة معًا، أو يُهدي أحدكم نجومًا من رصيده لأخيه (هدية لا تُردّ). يحتاج ذلك رمز وليّ الأمر.</p>
     <p><b>⏸ يوم العذر:</b> يسجّله وليّ الأمر للمرض أو السفر، فلا تنقطع السلسلة. يوم واحد في الأسبوع.</p>
     <p class="muted">النجوم للحفظ الجديد فقط: الآية المحفوظة من قبل لا تُحسب مرة ثانية. وإذا عُدّل سجل أو حُذف تتصحح النجوم تلقائيًا.</p></div>
     <button type="button" class="btn btn-primary btn-block" data-act="close-sheet">فهمت</button>`;
@@ -1723,12 +1751,152 @@ const STARS_ACT={
   'excuse-del':el=>{const d=el.dataset.d;pinGate(()=>{const SS=stuStars(curStudent());SS.excused=SS.excused.filter(x=>x!==d);save();if(UI.sheet)closeSheet();render();toast('تم حذف يوم العذر');});},
   'spent-undo':el=>{const id=el.dataset.id;pinGate(()=>{
     const SS=stuStars(curStudent()),x=SS.spent.find(s=>s.id===id);if(!x)return;
+    if(x.joint){
+      confirmSheet({title:'إلغاء الشراء المشترك «'+x.name+'»؟',msg:'ترجع النجوم إلى كل من اشترك فيه ('+x.with+' أيضًا).',yes:'إلغاء الشراء',onYes:()=>{DATA.students.forEach(s=>{if(s.stars)s.stars.spent=s.stars.spent.filter(e=>e.joint!==x.joint);});save();closeSheet();render();toast('رجعت النجوم إلى أصحابها');}});
+      return;
+    }
     confirmSheet({title:'إلغاء صرف «'+x.name+'»؟',msg:'سيرجع '+starsTxt(x.cost)+' إلى الرصيد.',yes:'إلغاء الصرف',onYes:()=>{SS.spent=SS.spent.filter(s=>s.id!==id);save();closeSheet();render();toast('رجعت النجوم إلى الرصيد');}});});},
   'pin-save':pinSubmit,
   'pin-ok':pinSubmit,
   'pin-change':()=>pinGate(()=>openSheet({type:'pin',mode:'set',change:true,next:null})),
   'stars-hist-more':()=>{UI.starsHistAll=!UI.starsHistAll;render();},
   'stars-rules':()=>openSheet({type:'stars-rules'})
+};
+/* ═══════════════ النجوم: الشراء المشترك والاستلاف بين الطلاب ═══════════════ */
+const otherStudents=stu=>DATA.students.filter(s=>s.id!==stu.id);
+const balOf=s=>starsOf(s).balance;
+/* هل يكفي مجموع أرصدة الطلاب لهذه المكافأة؟ */
+const jointPossible=(x,stu)=>DATA.students.length>1&&DATA.students.reduce((t,s)=>t+Math.max(0,balOf(s)),0)>=x.cost;
+function siblingsHTML(stu,S){
+  if(DATA.students.length<2)return '';
+  const rows=S.giftsIn.map(l=>[l,true]).concat(S.giftsOut.map(l=>[l,false])).sort((x,y)=>y[0].createdAt-x[0].createdAt);
+  const shown=UI.loansAll?rows:rows.slice(0,5);
+  let h=`<section class="sec"><div class="sec-h"><h2>النجوم مع الإخوة</h2></div>
+    <p class="muted" style="margin-top:6px;font-size:14px">يستطيع الطالب أن يُهدي من نجومه لأخيه (هدية لا تُردّ)، أو تجمعوا نجومكم معًا لشراء مكافأة واحدة من المتجر (زر «🤝 اجمعوا لها معًا» على المكافأة).</p>`;
+  if(shown.length)h+=`<ul class="rows">${shown.map(([l,inc])=>`<li class="row"><div style="flex:1;min-width:0">
+      <div class="t">${inc?'🎁 أهداك '+esc(stuName(l.from)):'💛 أهديت '+esc(stuName(l.to))} <b>${num(l.amount)}</b> ${STAR5}</div>
+      <div class="s">${fmtDate(l.date)}</div></div>
+      <b class="${inc?'stx-plus':'stx-minus'}">${inc?'+':'−'}${num(l.amount)}</b>
+      <button type="button" class="icon-x" data-act="loan-del" data-id="${esc(l.id)}" aria-label="إلغاء هذا الإهداء">${TRASH}</button></li>`).join('')}</ul>`;
+  if(rows.length>5)h+=`<button type="button" class="link" data-act="loans-all">${UI.loansAll?'عرض أقل':'عرض الكل ('+rows.length+')'}</button>`;
+  h+=`<div class="stack"><button type="button" class="btn btn-ghost btn-block" data-act="loan-open">إهداء نجوم لطالب آخر</button></div></section>`;
+  return h;
+}
+
+/* ── الشراء المشترك ── */
+function openJoint(id){
+  const stu=curStudent(),x=DATA.rewards.items.find(i=>i.id===id);if(!stu||!x)return;
+  /* التقسيم المقترح: الطالب الحالي يدفع ما يستطيع، والباقي على الآخرين بدءًا بالأعلى رصيدًا */
+  const order=[stu].concat(otherStudents(stu).sort((a,b)=>balOf(b)-balOf(a)));
+  let left=x.cost;const parts={};
+  order.forEach(s=>{const v=Math.max(0,Math.min(balOf(s),left));parts[s.id]=v;left-=v;});
+  openSheet({type:'joint',id,parts});
+}
+function jointRead(){const S=UI.sheet;document.querySelectorAll('.jt-in').forEach(el=>{S.parts[el.dataset.id]=parseNum(el.value)||0;});}
+function jointCheck(){
+  const S=UI.sheet,x=DATA.rewards.items.find(i=>i.id===S.id);if(!x)return {err:'المكافأة غير موجودة.'};
+  let sum=0,who=0;
+  for(const s of DATA.students){
+    const v=S.parts[s.id]||0,b=Math.max(0,balOf(s));
+    if(v<0)return {err:'لا يمكن إدخال رقم سالب.'};
+    if(v>b)return {err:s.name+' رصيده '+num(b)+' فقط.'};
+    sum+=v;if(v>0)who++;
+  }
+  if(sum<x.cost)return {err:'المجموع '+num(sum)+' من '+num(x.cost)+'. باقي '+starsTxt(x.cost-sum)+'.',sum};
+  if(sum>x.cost)return {err:'المجموع '+num(sum)+'، أكثر من سعر المكافأة بـ '+num(sum-x.cost)+'.',sum};
+  if(who<2)return {err:'هذا الشراء من طالب واحد فقط. استخدم زر «اصرفها» العادي.',sum};
+  return {ok:true,sum,x};
+}
+function jointHTML(S){
+  const x=DATA.rewards.items.find(i=>i.id===S.id);if(!x)return '';
+  const stu=curStudent();
+  return `<div class="jt-head"><div class="tgt-pic">${rwPic(x)}</div><div><div class="rw-n">${esc(x.name)}</div><div class="rw-c">${STAR5}${num(x.cost)}</div></div></div>
+    <p class="muted" style="margin-top:12px">كم يدفع كل واحد؟ يمكنك تعديل الأرقام.</p>
+    <ul class="rows">${[stu].concat(otherStudents(stu)).map(s=>{const b=Math.max(0,balOf(s));return `<li class="row jt-row">
+      <div style="flex:1;min-width:0"><div class="t">${esc(s.name)}</div><div class="s">رصيده ${num(b)}</div></div>
+      <input class="jt-in" data-id="${esc(s.id)}" type="text" inputmode="numeric" autocomplete="off" value="${S.parts[s.id]||0}" aria-label="نصيب ${esc(s.name)}"></li>`;}).join('')}</ul>
+    <div id="jt-preview" class="preview" aria-live="polite"></div>
+    <button type="button" class="btn btn-primary btn-block" id="jt-save" data-act="joint-save">اشتروها معًا 🤝</button>
+    <button type="button" class="link" style="display:block;margin:10px auto 0" data-act="joint-to-loan">أو يُهديك أخوك الباقي وتشتريها وحدك</button>`;
+}
+function updateJoint(){
+  jointRead();const c=jointCheck(),box=$('#jt-preview'),btn=$('#jt-save');if(!box)return;
+  if(!c.ok){box.textContent=c.err;box.classList.add('err');btn.disabled=true;return;}
+  box.classList.remove('err');btn.disabled=false;
+  box.innerHTML='المجموع '+num(c.sum)+' ✓ '+DATA.students.filter(s=>UI.sheet.parts[s.id]>0).map(s=>esc(s.name)+' يدفع '+num(UI.sheet.parts[s.id])).join('، ');
+}
+function jointSave(){
+  updateJoint();if($('#jt-save').disabled)return;
+  const S=UI.sheet,c=jointCheck(),x=c.x,g=uid(),date=todayISO();
+  const payers=DATA.students.filter(s=>S.parts[s.id]>0);
+  payers.forEach((s,k)=>{
+    const SS=stuStars(s);
+    SS.spent.push({id:uid(),rewardId:x.id,name:x.name,cost:S.parts[s.id],date,createdAt:Date.now()+k,joint:g,total:x.cost,with:payers.filter(o=>o!==s).map(o=>o.name).join('، ')});
+    if(SS.target===x.id)SS.target=null;
+  });
+  save();closeSheet();render();toast('🎉 مبروك! اشتريتم '+x.name+' معًا');
+}
+
+/* ── إهداء النجوم ── */
+function openLoan(amount,fromId,toId){
+  const stu=curStudent(),givers=DATA.students.filter(s=>balOf(s)>0);
+  if(!givers.length){toast('لا يوجد طالب لديه نجوم يُهديها الآن.');return;}
+  let from=givers.some(s=>s.id===fromId)?fromId:(balOf(stu)>0?stu.id:givers[0].id);
+  let to=toId&&toId!==from?toId:(DATA.students.find(s=>s.id!==from)||{}).id;
+  openSheet({type:'loan',from,to,amount:amount||Math.min(10,balOf(DATA.students.find(s=>s.id===from)))});
+}
+function loanHTML(S){
+  const givers=DATA.students.filter(s=>balOf(s)>0);
+  return `<p class="muted">ينتقل عدد من النجوم من رصيد طالب إلى رصيد طالب آخر كهدية، ولا تُردّ.</p>
+    <div class="field"><label for="ln-from">من</label><select id="ln-from">${givers.map(s=>`<option value="${esc(s.id)}"${s.id===S.from?' selected':''}>${esc(s.name)} (رصيده ${num(balOf(s))})</option>`).join('')}</select></div>
+    <div class="field"><label for="ln-to">إلى</label><select id="ln-to">${DATA.students.filter(s=>s.id!==S.from).map(s=>`<option value="${esc(s.id)}"${s.id===S.to?' selected':''}>${esc(s.name)}</option>`).join('')}</select></div>
+    <div class="field"><label for="ln-amt">كم نجمة؟</label><input id="ln-amt" type="text" inputmode="numeric" autocomplete="off" value="${S.amount||''}"></div>
+    <div id="ln-preview" class="preview" aria-live="polite"></div>
+    <button type="button" class="btn btn-primary btn-block" id="ln-save" data-act="loan-save">أهدِ النجوم 🎁</button>`;
+}
+function loanCheck(){
+  const S=UI.sheet,from=DATA.students.find(s=>s.id===S.from),to=DATA.students.find(s=>s.id===S.to);
+  if(!from||!to||from===to)return {err:'اختر من يُهدي ومن يستلم.'};
+  if(!(S.amount>0))return {err:'اكتب عدد النجوم.'};
+  const b=balOf(from);
+  if(S.amount>b)return {err:from.name+' رصيده '+num(b)+' فقط.'};
+  return {ok:true,from,to,b,tb:balOf(to)};
+}
+function updateLoan(){
+  const S=UI.sheet,f=$('#ln-from'),t=$('#ln-to'),a=$('#ln-amt');
+  if(a)S.amount=parseNum(a.value)||0;
+  if(f&&f.value!==S.from){S.from=f.value;if(S.to===S.from)S.to=(DATA.students.find(s=>s.id!==S.from)||{}).id;paintSheet();return;}
+  if(t)S.to=t.value;
+  const c=loanCheck(),box=$('#ln-preview'),btn=$('#ln-save');if(!box)return;
+  if(!c.ok){box.textContent=c.err;box.classList.add('err');btn.disabled=true;return;}
+  box.classList.remove('err');btn.disabled=false;
+  box.innerHTML=`${esc(c.from.name)}: ${num(c.b)} ← <b>${num(c.b-S.amount)}</b><br>${esc(c.to.name)}: ${num(c.tb)} ← <b>${num(c.tb+S.amount)}</b>`;
+}
+function loanSave(){
+  updateLoan();if($('#ln-save').disabled)return;
+  const S=UI.sheet,c=loanCheck();
+  DATA.rewards.loans.push({id:uid(),from:c.from.id,to:c.to.id,amount:S.amount,date:todayISO(),createdAt:Date.now(),repaid:[],forgiven:null});
+  save();closeSheet();render();toast('🎁 أهدى '+c.from.name+' '+starsTxt(S.amount)+' إلى '+c.to.name+'، ما أجمل الكرم!');
+}
+
+const SHARE_ACT={
+  'rw-joint':el=>{const id=el.dataset.id;pinGate(()=>openJoint(id));},
+  'joint-save':jointSave,
+  'joint-to-loan':()=>{
+    const S=UI.sheet,stu=curStudent(),x=DATA.rewards.items.find(i=>i.id===S.id);if(!x)return;
+    const need=x.cost-Math.max(0,balOf(stu));
+    const rich=otherStudents(stu).filter(s=>balOf(s)>=need).sort((a,b)=>balOf(b)-balOf(a))[0];
+    if(!rich){toast('لا يوجد طالب واحد رصيده يكفي لإهداء الباقي ('+num(need)+'). جرّبوا الشراء المشترك.');return;}
+    closeSheet();openLoan(need,rich.id,stu.id);
+  },
+  'loan-open':()=>pinGate(()=>openLoan()),
+  'loan-save':loanSave,
+  'loan-del':el=>{const id=el.dataset.id;pinGate(()=>{
+    const l=DATA.rewards.loans.find(x=>x.id===id);if(!l)return;
+    const to=DATA.students.find(s=>s.id===l.to);
+    if(to&&balOf(to)-l.amount<0){if(UI.sheet)closeSheet();toast('لا يمكن إلغاؤه: '+stuName(l.to)+' صرف هذه النجوم.');return;}
+    confirmSheet({title:'إلغاء هذا الإهداء؟',msg:'ترجع '+starsTxt(l.amount)+' إلى '+stuName(l.from)+' وتُخصم من '+stuName(l.to)+'. استخدمه لتصحيح خطأ فقط.',yes:'إلغاء الإهداء',onYes:()=>{DATA.rewards.loans=DATA.rewards.loans.filter(x=>x.id!==id);save();closeSheet();render();toast('تم إلغاء الإهداء');}});});},
+  'loans-all':()=>{UI.loansAll=!UI.loansAll;render();}
 };
 /* ═══════════════ الحالة العامة ═══════════════ */
 const UI={tab:'home',sheet:null,d:null,opener:null,welcome:'choice',
@@ -2620,6 +2788,8 @@ function paintSheet(){
     case 'reward-edit':html=sheetWrap(S.kind==='weekly'?'الهدية الأسبوعية':S.kind==='family'?'الهدف العائلي':S.id?'تعديل المكافأة':'مكافأة جديدة',rewardEditHTML(S));break;
     case 'excuse':html=sheetWrap('يوم عذر',excuseHTML(S));break;
     case 'stars-rules':html=sheetWrap('كيف تُحسب النجوم؟',starsRulesHTML());break;
+    case 'joint':html=sheetWrap('شراء مشترك 🤝',jointHTML(S));break;
+    case 'loan':html=sheetWrap('إهداء نجوم 🎁',loanHTML(S));break;
   }
   $('#sheet-root').innerHTML=html;
   if(S.type==='log')updateLog();
@@ -2633,6 +2803,8 @@ function paintSheet(){
   if(S.type==='plan-add-review')updatePlanReview();
   if(S.type==='mushaf-picker'||S.type==='page-view')mpFitLines();
   if(S.type==='pin'){const p=$('#pin-a');if(p)setTimeout(()=>p.focus(),60);}
+  if(S.type==='joint')updateJoint();
+  if(S.type==='loan')updateLoan();
 }
 function mpFitLines(){
   const lines=[...document.querySelectorAll('.mp-line')];
@@ -3321,7 +3493,7 @@ const ACT={
   },
   'theme-set':el=>setTheme(el.dataset.t)
 };
-Object.assign(ACT,STARS_ACT);
+Object.assign(ACT,STARS_ACT,SHARE_ACT);
 document.addEventListener('click',e=>{
   const el=e.target.closest('[data-act]');if(!el)return;
   const f=ACT[el.dataset.act];if(f){e.preventDefault();f(el,e);}
@@ -3342,6 +3514,7 @@ document.addEventListener('change',e=>{
   }
   if(t.id==='backup-file')return backupFileChosen(t);
   if(t.id==='rw-file')return rwImageChosen(t);
+  if(t.id==='ln-from'||t.id==='ln-to')return updateLoan();
   if(t.matches&&t.matches('.pk input[type=checkbox]')){
     const j=t.closest('.pk-j');
     if(t.hasAttribute('data-all'))j.querySelectorAll('.pk-row input:not(:disabled)').forEach(b=>{b.checked=t.checked;});
@@ -3385,6 +3558,8 @@ document.addEventListener('input',e=>{
   const S=UI.sheet;if(!S)return;const t=e.target;
   if(t.type==='checkbox'||t.tagName==='SELECT')return;
   if(S.type==='log')updateLog();
+  else if(S.type==='joint')updateJoint();
+  else if(S.type==='loan')updateLoan();
   else if(S.type==='edit')updateEdit();
   else if(S.type==='plan-add-hifz')updatePlanHifz();
   else if(S.type==='plan-add-review')updatePlanReview();
